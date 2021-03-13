@@ -911,6 +911,16 @@ pub fn test_decompositions_windows() {
     file_stem: Some("b"),
     extension: None
     );
+
+    t!("\\??\\a\\b\\",
+    iter: ["\\??\\a", "\\", "b"],
+    has_root: true,
+    is_absolute: true,
+    parent: Some("\\??\\a\\"),
+    file_name: Some("b"),
+    file_stem: Some("b"),
+    extension: None
+    );
 }
 
 #[test]

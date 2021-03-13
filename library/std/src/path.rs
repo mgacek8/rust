@@ -78,7 +78,7 @@ use crate::sync::Arc;
 
 use crate::ffi::{OsStr, OsString};
 
-use crate::sys::path::{is_sep_byte, is_verbatim_sep, parse_prefix, MAIN_SEP_STR};
+use crate::sys::path::{is_sep_byte, is_verbatim_or_nt_sep, parse_prefix, MAIN_SEP_STR};
 
 ////////////////////////////////////////////////////////////////////////////////
 // GENERAL NOTES
@@ -128,6 +128,7 @@ use crate::sys::path::{is_sep_byte, is_verbatim_sep, parse_prefix, MAIN_SEP_STR}
 /// assert_eq!(UNC(OsStr::new("server"), OsStr::new("share")),
 ///            get_path_prefix(r"\\server\share"));
 /// assert_eq!(Disk(b'C'), get_path_prefix(r"C:\Users\Rust\Pictures\Ferris"));
+/// assert_eq!(NtDisk(b'c'), get_path_prefix(r"\??\C:\Users\Rust\Pictures\Ferris));
 /// # }
 /// ```
 #[derive(Copy, Clone, Debug, Hash, PartialOrd, Ord, PartialEq, Eq)]
@@ -178,6 +179,27 @@ pub enum Prefix<'a> {
     /// Prefix `C:` for the given disk drive.
     #[stable(feature = "rust1", since = "1.0.0")]
     Disk(#[stable(feature = "rust1", since = "1.0.0")] u8),
+
+    // void DriverUnload(_In_ PDRIVER_OBJECT DriverObject) {
+    //     UNICODE_STRING symLink = RTL_CONSTANT_STRING(L"\\??\\DriverNameSymLink");
+    //     IoDeleteSymbolicLink(&symLink);
+    //     IoDeleteDevice(DriverObject->DeviceObject);
+    // }
+
+    /// NT prefix, e.g., `\??\driverName`.
+    ///
+    /// NT prefixes consist of `\??\` immediately followed by the given
+    /// component.
+    // e.g. `NDIS` -> `\Device\Ndis`, where `NDIS` is a symlink to a kernel driver
+    // This is rather not needed ...
+    // Nt(&'a OsStr),
+
+    /// NT disk prefix, e.g., `\??\C:`.
+    ///
+    /// NT disk prefixes consist of `\??\` immediately followed by the
+    /// drive letter and `:`.
+    // e.g. `C:` -> `\Device\HarddiskVolume3`
+    NtDisk(u8),
 }
 
 impl<'a> Prefix<'a> {
@@ -192,7 +214,7 @@ impl<'a> Prefix<'a> {
             VerbatimUNC(x, y) => {
                 8 + os_str_len(x) + if os_str_len(y) > 0 { 1 + os_str_len(y) } else { 0 }
             }
-            VerbatimDisk(_) => 6,
+            VerbatimDisk(_) | NtDisk(_)  => 6,
             UNC(x, y) => 2 + os_str_len(x) + if os_str_len(y) > 0 { 1 + os_str_len(y) } else { 0 },
             DeviceNS(x) => 4 + os_str_len(x),
             Disk(_) => 2,
@@ -213,12 +235,18 @@ impl<'a> Prefix<'a> {
     /// assert!(!DeviceNS(OsStr::new("BrainInterface")).is_verbatim());
     /// assert!(!UNC(OsStr::new("server"), OsStr::new("share")).is_verbatim());
     /// assert!(!Disk(b'C').is_verbatim());
+    /// assert!(!NtDisk(b'C').is_verbatim());
     /// ```
     #[inline]
     #[stable(feature = "rust1", since = "1.0.0")]
     pub fn is_verbatim(&self) -> bool {
         use self::Prefix::*;
         matches!(*self, Verbatim(_) | VerbatimDisk(_) | VerbatimUNC(..))
+    }
+
+    pub fn is_nt(&self) -> bool {
+        use self::Prefix::*;
+        matches!(*self, Nt(_))
     }
 
     #[inline]
@@ -618,6 +646,11 @@ impl<'a> Components<'a> {
         self.prefix.as_ref().map(Prefix::is_verbatim).unwrap_or(false)
     }
 
+    #[inline]
+    fn prefix_nt(&self) -> bool {
+        self.prefix.as_ref().map(Prefix::is_nt).unwrap_or(false)
+    }
+
     /// how much of the prefix is left from the point of view of iteration?
     #[inline]
     fn prefix_remaining(&self) -> usize {
@@ -640,7 +673,7 @@ impl<'a> Components<'a> {
 
     #[inline]
     fn is_sep_byte(&self, b: u8) -> bool {
-        if self.prefix_verbatim() { is_verbatim_sep(b) } else { is_sep_byte(b) }
+        if self.prefix_verbatim() || self.prefix_nt() { is_verbatim_or_nt_sep(b) } else { is_sep_byte(b) }
     }
 
     /// Extracts a slice corresponding to the portion of the path remaining for iteration.
@@ -697,7 +730,7 @@ impl<'a> Components<'a> {
     // parse a given byte sequence into the corresponding path component
     fn parse_single_component<'b>(&self, comp: &'b [u8]) -> Option<Component<'b>> {
         match comp {
-            b"." if self.prefix_verbatim() => Some(Component::CurDir),
+            b"." if self.prefix_verbatim() || self.prefix_nt() => Some(Component::CurDir),
             b"." => None, // . components are normalized away, except at
             // the beginning of a path, which is treated
             // separately via `include_cur_dir`
@@ -871,7 +904,7 @@ impl<'a> Iterator for Components<'a> {
                         self.path = &self.path[1..];
                         return Some(Component::RootDir);
                     } else if let Some(p) = self.prefix {
-                        if p.has_implicit_root() && !p.is_verbatim() {
+                        if p.has_implicit_root() && !p.is_verbatim() && !p.is_nt(){
                             return Some(Component::RootDir);
                         }
                     } else if self.include_cur_dir() {
@@ -918,7 +951,7 @@ impl<'a> DoubleEndedIterator for Components<'a> {
                         self.path = &self.path[..self.path.len() - 1];
                         return Some(Component::RootDir);
                     } else if let Some(p) = self.prefix {
-                        if p.has_implicit_root() && !p.is_verbatim() {
+                        if p.has_implicit_root() && !p.is_verbatim() && !p.is_nt() {
                             return Some(Component::RootDir);
                         }
                     } else if self.include_cur_dir() {

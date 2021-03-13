@@ -41,4 +41,6 @@ fn test_parse_next_component() {
         parse_next_component(OsStr::new(r"server\\\\\\\\\\\\\\share"), true),
         (OsStr::new(r"server"), OsStr::new(r"\\\\\\\\\\\\\share"))
     );
+
+    //Todo: add tests
 }

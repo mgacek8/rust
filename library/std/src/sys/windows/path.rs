@@ -24,9 +24,11 @@ pub fn is_sep_byte(b: u8) -> bool {
 }
 
 #[inline]
-pub fn is_verbatim_sep(b: u8) -> bool {
+pub fn is_verbatim_or_nt_sep(b: u8) -> bool {
     b == b'\\'
 }
+
+// Todo: check if one can write path like this: `\??\C:\User/folder`
 
 pub fn parse_prefix(path: &OsStr) -> Option<Prefix<'_>> {
     use Prefix::{DeviceNS, Disk, Verbatim, VerbatimDisk, VerbatimUNC, UNC};
@@ -73,6 +75,15 @@ pub fn parse_prefix(path: &OsStr) -> Option<Prefix<'_>> {
     } else if let Some(drive) = parse_drive(path) {
         // C:
         Some(Disk(drive))
+    } else if let Some(path) = strip_prefix(path, r"\??\"){
+        // \??\
+        let (prefix, _) = parse_next_component(path, true);
+
+        // in verbatim paths only recognize an exact drive prefix
+        if let Some(drive) = parse_drive_exact(prefix) {
+            // \??\C:
+            Some(NtDisk(drive))
+        }
     } else {
         // no prefix
         None
@@ -113,7 +124,7 @@ fn strip_prefix<'a>(path: &'a OsStr, prefix: &str) -> Option<&'a OsStr> {
 // Returns the next component and the rest of the path excluding the component and separator.
 // Does not recognize `/` as a separator character if `verbatim` is true.
 fn parse_next_component(path: &OsStr, verbatim: bool) -> (&OsStr, &OsStr) {
-    let separator = if verbatim { is_verbatim_sep } else { is_sep_byte };
+    let separator = if verbatim { is_verbatim_or_nt_sep } else { is_sep_byte };
 
     match path.bytes().iter().position(|&x| separator(x)) {
         Some(separator_start) => {

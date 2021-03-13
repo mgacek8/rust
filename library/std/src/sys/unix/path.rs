@@ -7,7 +7,7 @@ pub fn is_sep_byte(b: u8) -> bool {
 }
 
 #[inline]
-pub fn is_verbatim_sep(b: u8) -> bool {
+pub fn is_verbatim_or_nt_sep(b: u8) -> bool {
     b == b'/'
 }
 
